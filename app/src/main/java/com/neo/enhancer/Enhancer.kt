@@ -28,6 +28,7 @@ import kotlin.math.roundToInt
 data class Settings(
     val fps: Int,
     val noBlur: Boolean,
+    val motionBlur: Boolean,
     val ai: Boolean,
     val shortSide: Int
 )
@@ -58,6 +59,12 @@ object Enhancer {
 
     private fun sharpen(noBlur: Boolean) =
         if (noBlur) "unsharp=7:7:1.5:7:7:0.6" else "unsharp=5:5:0.8:5:5:0.0"
+
+    /** Motion blur = blend neighbouring frames. More frames at higher FPS. */
+    private fun motionBlurFilter(outFps: Int): String {
+        val n = (outFps / 20.0).roundToInt().coerceIn(2, 4)
+        return "tmix=frames=$n"
+    }
 
     private fun fpsFilter(srcFps: Double, target: Int): String? = when {
         target > srcFps + 0.5 ->
@@ -124,6 +131,41 @@ object Enhancer {
                     (info.size.height * f).toInt().coerceAtLeast(1)
                 )
             }
+        }
+    }
+
+    /** Decode a file on disk, shrunk so the long side is about maxSide or less. */
+    fun decodeFileScaled(path: String, maxSide: Int): Bitmap? {
+        val b = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, b)
+        var sample = 1
+        while (max(b.outWidth, b.outHeight) / sample > maxSide) sample *= 2
+        val o = BitmapFactory.Options().apply { inSampleSize = sample }
+        return BitmapFactory.decodeFile(path, o)
+    }
+
+    /** One frame of a video at position 0..1, used for the before/after preview. */
+    fun frameAt(path: String, fraction: Float, maxSide: Int = 1600): Bitmap? {
+        val mmr = MediaMetadataRetriever()
+        return try {
+            mmr.setDataSource(path)
+            val dur = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val t = (dur * 1000L * fraction.coerceIn(0f, 0.98f)).toLong()
+            val bmp = mmr.getFrameAtTime(t, MediaMetadataRetriever.OPTION_CLOSEST) ?: return null
+            val big = max(bmp.width, bmp.height)
+            if (big > maxSide) {
+                val f = maxSide.toFloat() / big
+                Bitmap.createScaledBitmap(
+                    bmp,
+                    (bmp.width * f).roundToInt().coerceAtLeast(1),
+                    (bmp.height * f).roundToInt().coerceAtLeast(1),
+                    true
+                )
+            } else bmp
+        } catch (e: Throwable) {
+            null
+        } finally {
+            mmr.release()
         }
     }
 
@@ -220,10 +262,12 @@ object Enhancer {
         // ---- FAST MODE: one FFmpeg pass ----
         if (!useAi) {
             val fpsF = fpsFilter(info.fps, s.fps)
+            val outFps = if (fpsF != null) s.fps else info.fps.roundToInt()
             val parts = mutableListOf<String>()
             if (upscaling && fpsF != null) parts += fpsF
             parts += "scale=$tw:$th:flags=lanczos"
             if (!upscaling && fpsF != null) parts += fpsF
+            if (s.motionBlur) parts += motionBlurFilter(outFps)
             parts += sharpen(s.noBlur)
             parts += "format=yuv420p"
             report(0f, "Enhancing video...")
@@ -259,7 +303,6 @@ object Enhancer {
         val frames = (inDir.listFiles() ?: emptyArray()).sortedBy { it.name }
         if (frames.isEmpty()) throw IOException("No frames extracted")
 
-        // target size from the real frame size
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(frames[0].path, bounds)
         val (ftw, fth) = targetSize(bounds.outWidth, bounds.outHeight, s.shortSide)
@@ -277,8 +320,10 @@ object Enhancer {
         }
 
         val fpsF2 = fpsFilter(extractFps, s.fps)
+        val outFps = if (fpsF2 != null) s.fps else extractFps.roundToInt()
         val parts = mutableListOf<String>()
         if (fpsF2 != null) parts += fpsF2
+        if (s.motionBlur) parts += motionBlurFilter(outFps)
         if (s.noBlur) parts += sharpen(true)
         parts += "format=yuv420p"
 
