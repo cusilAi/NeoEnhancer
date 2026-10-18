@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">Neo Enhancer</string>
+    <string name="app_name">NeoEnhancer | AI Video Enhancer</string>
+    <string name="launcher_name">NeoEnhancer</string>
 </resources>
