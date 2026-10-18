@@ -30,6 +30,7 @@ data class Settings(
     val noBlur: Boolean,
     val motionBlur: Boolean,
     val quality: Int, // 0 = off, 1 = low, 2 = medium, 3 = high
+    val deblur: Boolean, // Blur Destroyer
     val ai: Boolean,
     val shortSide: Int
 )
@@ -60,6 +61,9 @@ object Enhancer {
 
     private fun sharpen(noBlur: Boolean) =
         if (noBlur) "unsharp=7:7:1.5:7:7:0.6" else "unsharp=5:5:0.8:5:5:0.0"
+
+    /** Used when the AI deblur model is not in the build: strong sharpen. */
+    private const val CLASSIC_DEBLUR = "unsharp=13:13:2.5:13:13:1.0"
 
     /** Motion blur = blend neighbouring frames. More frames at higher FPS. */
     private fun motionBlurFilter(outFps: Int): String {
@@ -104,6 +108,18 @@ object Enhancer {
         dir.deleteRecursively()
         dir.mkdirs()
         return dir
+    }
+
+    private fun limitSize(bmp: Bitmap, maxSide: Int): Bitmap {
+        val big = max(bmp.width, bmp.height)
+        if (big <= maxSide) return bmp
+        val f = maxSide.toFloat() / big
+        return Bitmap.createScaledBitmap(
+            bmp,
+            (bmp.width * f).roundToInt().coerceAtLeast(1),
+            (bmp.height * f).roundToInt().coerceAtLeast(1),
+            true
+        )
     }
 
     private suspend fun ffmpeg(args: List<String>, totalMs: Long, onProgress: (Float) -> Unit) {
@@ -227,16 +243,32 @@ object Enhancer {
         uri: Uri,
         s: Settings,
         upscaler: () -> Upscaler,
+        deblurrer: () -> Deblurrer,
         report: (Float, String) -> Unit
     ): File {
         val work = freshWork(context)
+        val ctx = currentCoroutineContext()
         report(0f, "Loading image...")
-        val bmp = decodeImage(context, uri, 4096)
+        var bmp = decodeImage(context, uri, 4096)
+
+        val deblurAi = s.deblur && Deblurrer.isAvailable(context)
+        val deblurClassic = s.deblur && !deblurAi
+        val w = if (deblurAi) 0.5f else 0f
+        fun stage(p: Float) = w + p * (1f - w)
+
+        // ---- Blur Destroyer (AI) ----
+        if (deblurAi) {
+            val small = limitSize(bmp, 2560)
+            bmp = deblurrer().deblur(small) { done, total ->
+                ctx.ensureActive()
+                report(w * done / total.coerceAtLeast(1), "Blur Destroyer... $done/$total")
+            }
+        }
+
         val (tw, th) = targetSize(bmp.width, bmp.height, s.shortSide)
         val upscaling = min(tw, th) > min(bmp.width, bmp.height)
         val useAi = s.ai && upscaling
 
-        val ctx = currentCoroutineContext()
         val inPng = File(work, "in.png")
         val out = File(work, "out.jpg")
 
@@ -244,7 +276,7 @@ object Enhancer {
         val dn = denoiseFilter(s.quality)
         var aiSource: Bitmap = bmp
         if (useAi && dn != null) {
-            report(0.02f, "Cleaning noise...")
+            report(stage(0.02f), "Cleaning noise...")
             val raw = File(work, "raw.png")
             val den = File(work, "den.png")
             FileOutputStream(raw).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -256,7 +288,7 @@ object Enhancer {
         val toSave: Bitmap = if (useAi) {
             upscaler().upscale(aiSource, tw, th) { done, total ->
                 ctx.ensureActive()
-                report(0.05f + 0.8f * done / total.coerceAtLeast(1), "AI enhancing... $done/$total")
+                report(stage(0.05f + 0.8f * done / total.coerceAtLeast(1)), "AI enhancing... $done/$total")
             }
         } else bmp
         FileOutputStream(inPng).use { toSave.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -267,10 +299,11 @@ object Enhancer {
             parts += "scale=$tw:$th:flags=lanczos"
         }
         parts += polishFilters(s.quality)
+        if (deblurClassic) parts += CLASSIC_DEBLUR
         if (!useAi || s.noBlur) parts += sharpen(s.noBlur)
         val vf = if (parts.isEmpty()) "null" else parts.joinToString(",")
 
-        report(0.85f, "Finishing...")
+        report(stage(0.85f), "Finishing...")
         ffmpeg(listOf("-y", "-i", inPng.path, "-vf", vf, "-q:v", "2", out.path), 0L) { }
         inPng.delete()
         report(1f, "Done")
@@ -285,6 +318,7 @@ object Enhancer {
         info: VideoInfo,
         s: Settings,
         upscaler: () -> Upscaler,
+        deblurrer: () -> Deblurrer,
         report: (Float, String) -> Unit
     ): File {
         val work = freshWork(context)
@@ -292,10 +326,12 @@ object Enhancer {
         val (tw, th) = targetSize(info.width, info.height, s.shortSide)
         val upscaling = min(tw, th) > min(info.width, info.height)
         val useAi = s.ai && upscaling
+        val deblurAi = s.deblur && Deblurrer.isAvailable(context)
+        val deblurClassic = s.deblur && !deblurAi
         val dn = denoiseFilter(s.quality)
 
         // ---- FAST MODE: one FFmpeg pass ----
-        if (!useAi) {
+        if (!useAi && !deblurAi) {
             val fpsF = fpsFilter(info.fps, s.fps)
             val outFps = if (fpsF != null) s.fps else info.fps.roundToInt()
             val parts = mutableListOf<String>()
@@ -305,6 +341,7 @@ object Enhancer {
             if (!upscaling && fpsF != null) parts += fpsF
             if (s.motionBlur) parts += motionBlurFilter(outFps)
             parts += polishFilters(s.quality)
+            if (deblurClassic) parts += CLASSIC_DEBLUR
             parts += sharpen(s.noBlur)
             parts += "format=yuv420p"
             report(0f, "Enhancing video...")
@@ -324,7 +361,7 @@ object Enhancer {
             return out
         }
 
-        // ---- AI MODE: frames -> AI -> encode ----
+        // ---- FRAME MODE (AI upscale and/or Blur Destroyer): frames -> AI -> encode ----
         val ctx = currentCoroutineContext()
         val extractFps = if (s.fps < info.fps - 0.5) s.fps.toDouble() else info.fps
         val fpsStr = String.format(Locale.US, "%.3f", extractFps)
@@ -345,16 +382,25 @@ object Enhancer {
         BitmapFactory.decodeFile(frames[0].path, bounds)
         val (ftw, fth) = targetSize(bounds.outWidth, bounds.outHeight, s.shortSide)
 
-        val up = upscaler()
+        val up = if (useAi) upscaler() else null
+        val deb = if (deblurAi) deblurrer() else null
         frames.forEachIndexed { i, f ->
             ctx.ensureActive()
             val bmp = BitmapFactory.decodeFile(f.path) ?: throw IOException("Bad frame ${f.name}")
-            val res = up.upscale(bmp, ftw, fth) { _, _ -> ctx.ensureActive() }
+            var cur = bmp
+            if (deb != null) cur = deb.deblur(cur) { _, _ -> ctx.ensureActive() }
+            val res = if (up != null) {
+                up.upscale(cur, ftw, fth) { _, _ -> ctx.ensureActive() }
+            } else if (cur.width != ftw || cur.height != fth) {
+                Bitmap.createScaledBitmap(cur, ftw, fth, true)
+            } else cur
             FileOutputStream(File(outDir, f.name)).use { res.compress(Bitmap.CompressFormat.JPEG, 95, it) }
             bmp.recycle()
+            cur.recycle()
             res.recycle()
             f.delete()
-            report(0.05f + 0.8f * (i + 1) / frames.size, "AI enhancing frame ${i + 1}/${frames.size}")
+            val label = if (deb != null) "Blur Destroyer" else "AI enhancing"
+            report(0.05f + 0.8f * (i + 1) / frames.size, "$label frame ${i + 1}/${frames.size}")
         }
 
         val fpsF2 = fpsFilter(extractFps, s.fps)
@@ -363,6 +409,7 @@ object Enhancer {
         if (fpsF2 != null) parts += fpsF2
         if (s.motionBlur) parts += motionBlurFilter(outFps)
         parts += polishFilters(s.quality)
+        if (deblurClassic) parts += CLASSIC_DEBLUR
         if (s.noBlur) parts += sharpen(true)
         parts += "format=yuv420p"
 

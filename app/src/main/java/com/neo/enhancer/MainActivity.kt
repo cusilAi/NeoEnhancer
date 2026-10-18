@@ -75,13 +75,14 @@ import kotlin.math.roundToInt
 class MainActivity : ComponentActivity() {
 
     private val upscaler by lazy { Upscaler(applicationContext) }
+    private val deblurrer by lazy { Deblurrer(applicationContext) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    EnhanceScreen(upscaler = { upscaler })
+                    EnhanceScreen(upscaler = { upscaler }, deblurrer = { deblurrer })
                 }
             }
         }
@@ -178,10 +179,11 @@ private fun BeforeAfter(before: Bitmap, after: Bitmap) {
 }
 
 @Composable
-fun EnhanceScreen(upscaler: () -> Upscaler) {
+fun EnhanceScreen(upscaler: () -> Upscaler, deblurrer: () -> Deblurrer) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val view = LocalView.current
+    val hasDeblurModel = remember { Deblurrer.isAvailable(context) }
 
     var mode by remember { mutableIntStateOf(0) } // 0 = video, 1 = image
     var imageUri by remember { mutableStateOf<Uri?>(null) }
@@ -195,6 +197,7 @@ fun EnhanceScreen(upscaler: () -> Upscaler) {
     var noBlur by remember { mutableStateOf(true) }
     var motionBlur by remember { mutableStateOf(false) }
     var quality by remember { mutableIntStateOf(0) } // 0 = off, 1..3 = low..high
+    var deblur by remember { mutableStateOf(false) }
     var ai by remember { mutableStateOf(false) }
     var resIndex by remember { mutableIntStateOf(3) }
 
@@ -401,6 +404,28 @@ fun EnhanceScreen(upscaler: () -> Upscaler) {
                     }
                 }
 
+                SettingSwitch("Blur Destroyer (AI deblur)", deblur) { if (!busy) deblur = it }
+                if (deblur) {
+                    Text(
+                        "Removes motion blur and camera shake, then sharpens. Works best on mild to medium blur. It cannot rebuild details that are completely smeared away.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (!hasDeblurModel) {
+                        Text(
+                            "The AI deblur model is not in this build, so strong sharpen will be used instead.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFFFB74D)
+                        )
+                    }
+                    Text(
+                        if (mode == 0)
+                            "On video it runs on every frame and is very slow. Try clips of 2-3 seconds."
+                        else
+                            "Can take 1-3 minutes per image.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
                 SettingSwitch("Improve quality", quality > 0) { if (!busy) quality = if (it) 2 else 0 }
                 if (quality > 0) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -461,7 +486,7 @@ fun EnhanceScreen(upscaler: () -> Upscaler) {
             enabled = ready && !busy,
             onClick = {
                 val s = Settings(
-                    fps.roundToInt(), noBlur, motionBlur, quality, ai, RESOLUTIONS[resIndex].first
+                    fps.roundToInt(), noBlur, motionBlur, quality, deblur, ai, RESOLUTIONS[resIndex].first
                 )
                 val isVideo = mode == 0
                 val vFile = videoFile
@@ -479,8 +504,8 @@ fun EnhanceScreen(upscaler: () -> Upscaler) {
                             status = t
                         }
                         val file = withContext(Dispatchers.Default) {
-                            if (isVideo) Enhancer.enhanceVideo(context, vFile!!, vInfo!!, s, upscaler, report)
-                            else Enhancer.enhanceImage(context, iUri!!, s, upscaler, report)
+                            if (isVideo) Enhancer.enhanceVideo(context, vFile!!, vInfo!!, s, upscaler, deblurrer, report)
+                            else Enhancer.enhanceImage(context, iUri!!, s, upscaler, deblurrer, report)
                         }
                         val uri = withContext(Dispatchers.IO) { Enhancer.saveToGallery(context, file, isVideo) }
 
