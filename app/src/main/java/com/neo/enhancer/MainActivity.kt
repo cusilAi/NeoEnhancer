@@ -151,7 +151,7 @@ fun EnhanceScreen(upscaler: () -> Upscaler) {
                     }
                     status = ""
                 } catch (e: Throwable) {
-                    status = "Error: ${e.message}"
+                    status = "Error: ${e} | cause: ${e.cause}"
                 }
                 busy = false
             }
@@ -339,7 +339,7 @@ fun EnhanceScreen(upscaler: () -> Upscaler) {
                         status = "Cancelled"
                         throw e
                     } catch (e: Throwable) {
-                        status = "Error: ${e.message}"
+                        status = "Error: ${e} | cause: ${e.cause}"
                     } finally {
                         busy = false
                     }
