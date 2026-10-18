@@ -10,13 +10,15 @@ import kotlin.math.min
 
 /**
  * Blur Destroyer: AI motion-deblur (NAFNet GoPro, ONNX) run tile by tile.
- * Output has the same size as the input.
+ * Some exported NAFNet models only accept tiles of a minimum size, so the
+ * right tile size is found automatically when the model is loaded.
  */
 class Deblurrer(context: Context) {
 
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val session: OrtSession
     private val inputName: String
+    private val tile: Int
 
     init {
         val bytes = context.assets.open(MODEL_FILE).use { it.readBytes() }
@@ -24,6 +26,25 @@ class Deblurrer(context: Context) {
         opts.setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(2, 8))
         session = env.createSession(bytes, opts)
         inputName = session.inputNames.iterator().next()
+        tile = findTileSize()
+    }
+
+    /** Try tile sizes from small to large until the model runs. */
+    private fun findTileSize(): Int {
+        var lastError: Throwable? = null
+        for (size in CANDIDATES) {
+            try {
+                val data = FloatArray(3 * size * size) { 0.5f }
+                val shape = longArrayOf(1, 3, size.toLong(), size.toLong())
+                OnnxTensor.createTensor(env, FloatBuffer.wrap(data), shape).use { t ->
+                    session.run(mapOf(inputName to t)).use { }
+                }
+                return size
+            } catch (e: Throwable) {
+                lastError = e
+            }
+        }
+        throw IllegalStateException("Deblur model rejects every tile size: " + lastError?.message)
     }
 
     @Synchronized
@@ -34,11 +55,11 @@ class Deblurrer(context: Context) {
         src.getPixels(srcPx, 0, sw, 0, 0, sw, sh)
         val outPx = IntArray(sw * sh)
 
-        val core = TILE - 2 * PAD
+        val core = tile - 2 * PAD
         val total = ((sw + core - 1) / core) * ((sh + core - 1) / core)
         var done = 0
-        val plane = TILE * TILE
-        val shape = longArrayOf(1, 3, TILE.toLong(), TILE.toLong())
+        val plane = tile * tile
+        val shape = longArrayOf(1, 3, tile.toLong(), tile.toLong())
 
         var cy = 0
         while (cy < sh) {
@@ -51,13 +72,13 @@ class Deblurrer(context: Context) {
                 val ox = cx - PAD
                 val oy = cy - PAD
                 val data = FloatArray(3 * plane)
-                for (yy in 0 until TILE) {
+                for (yy in 0 until tile) {
                     val sy = (oy + yy).coerceIn(0, sh - 1)
                     val row = sy * sw
-                    for (xx in 0 until TILE) {
+                    for (xx in 0 until tile) {
                         val sx = (ox + xx).coerceIn(0, sw - 1)
                         val p = srcPx[row + sx]
-                        val i = yy * TILE + xx
+                        val i = yy * tile + xx
                         data[i] = ((p shr 16) and 0xFF) / 255f
                         data[plane + i] = ((p shr 8) and 0xFF) / 255f
                         data[2 * plane + i] = (p and 0xFF) / 255f
@@ -68,7 +89,7 @@ class Deblurrer(context: Context) {
                     session.run(mapOf(inputName to tensor)).use { res ->
                         val fb = (res[0] as OnnxTensor).floatBuffer
                         for (yy in 0 until ch) {
-                            val orow = (PAD + yy) * TILE + PAD
+                            val orow = (PAD + yy) * tile + PAD
                             val drow = (cy + yy) * sw + cx
                             for (xx in 0 until cw) {
                                 val i = orow + xx
@@ -95,8 +116,8 @@ class Deblurrer(context: Context) {
 
     companion object {
         const val MODEL_FILE = "deblur.onnx"
-        private const val TILE = 256
         private const val PAD = 16
+        private val CANDIDATES = intArrayOf(256, 320, 384, 448, 512, 640, 768, 1024)
 
         /** True when the deblur model was bundled into this build. */
         fun isAvailable(context: Context): Boolean = try {
@@ -104,6 +125,17 @@ class Deblurrer(context: Context) {
             true
         } catch (e: Exception) {
             false
+        }
+
+        /** True when the model is bundled AND loads and runs on this phone. */
+        fun isUsable(context: Context, provider: () -> Deblurrer): Boolean {
+            if (!isAvailable(context)) return false
+            return try {
+                provider()
+                true
+            } catch (e: Throwable) {
+                false
+            }
         }
     }
 }

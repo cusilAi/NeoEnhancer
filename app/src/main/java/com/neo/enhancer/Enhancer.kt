@@ -251,7 +251,7 @@ object Enhancer {
         report(0f, "Loading image...")
         var bmp = decodeImage(context, uri, 4096)
 
-        val deblurAi = s.deblur && Deblurrer.isAvailable(context)
+        val deblurAi = s.deblur && Deblurrer.isUsable(context, deblurrer)
         val deblurClassic = s.deblur && !deblurAi
         val w = if (deblurAi) 0.5f else 0f
         fun stage(p: Float) = w + p * (1f - w)
@@ -326,7 +326,7 @@ object Enhancer {
         val (tw, th) = targetSize(info.width, info.height, s.shortSide)
         val upscaling = min(tw, th) > min(info.width, info.height)
         val useAi = s.ai && upscaling
-        val deblurAi = s.deblur && Deblurrer.isAvailable(context)
+        val deblurAi = s.deblur && Deblurrer.isUsable(context, deblurrer)
         val deblurClassic = s.deblur && !deblurAi
         val dn = denoiseFilter(s.quality)
 
