@@ -58,4 +58,5 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
     // Maintained FFmpegKit fork (original was removed from Maven Central)
     implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full-gpl:7.1.6")
+    implementation("com.arthenica:smart-exception-java:0.2.1")
 }
