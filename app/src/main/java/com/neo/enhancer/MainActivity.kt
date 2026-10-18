@@ -97,6 +97,8 @@ private val RESOLUTIONS = listOf(
     2160 to "4K"
 )
 
+private val QUALITY_LEVELS = listOf(1 to "Low", 2 to "Medium", 3 to "High")
+
 private fun errText(e: Throwable): String =
     "Error: " + (e.message ?: e.toString()) + (e.cause?.let { " | cause: $it" } ?: "")
 
@@ -192,6 +194,7 @@ fun EnhanceScreen(upscaler: () -> Upscaler) {
     var fps by remember { mutableFloatStateOf(30f) }
     var noBlur by remember { mutableStateOf(true) }
     var motionBlur by remember { mutableStateOf(false) }
+    var quality by remember { mutableIntStateOf(0) } // 0 = off, 1..3 = low..high
     var ai by remember { mutableStateOf(false) }
     var resIndex by remember { mutableIntStateOf(3) }
 
@@ -290,7 +293,7 @@ fun EnhanceScreen(upscaler: () -> Upscaler) {
             }
         }
 
-        // Preview (hidden when the before/after result is showing)
+        // Preview (replaced by the before/after view once a result exists)
         val b = beforeBmp
         val a = afterBmp
         if (b != null && a != null && !busy) {
@@ -398,6 +401,23 @@ fun EnhanceScreen(upscaler: () -> Upscaler) {
                     }
                 }
 
+                SettingSwitch("Improve quality", quality > 0) { if (!busy) quality = if (it) 2 else 0 }
+                if (quality > 0) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        QUALITY_LEVELS.forEach { (lvl, label) ->
+                            FilterChip(
+                                selected = quality == lvl,
+                                onClick = { if (!busy) quality = lvl },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
+                    Text(
+                        "Removes noise and grain, smooths color banding, and boosts contrast and color. Higher = stronger.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
                 SettingSwitch("No blur (sharpen)", noBlur) { if (!busy) noBlur = it }
                 if (mode == 0) {
                     SettingSwitch("Motion blur", motionBlur) { if (!busy) motionBlur = it }
@@ -440,7 +460,9 @@ fun EnhanceScreen(upscaler: () -> Upscaler) {
             modifier = Modifier.fillMaxWidth().height(56.dp),
             enabled = ready && !busy,
             onClick = {
-                val s = Settings(fps.roundToInt(), noBlur, motionBlur, ai, RESOLUTIONS[resIndex].first)
+                val s = Settings(
+                    fps.roundToInt(), noBlur, motionBlur, quality, ai, RESOLUTIONS[resIndex].first
+                )
                 val isVideo = mode == 0
                 val vFile = videoFile
                 val vInfo = videoInfo

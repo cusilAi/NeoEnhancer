@@ -29,6 +29,7 @@ data class Settings(
     val fps: Int,
     val noBlur: Boolean,
     val motionBlur: Boolean,
+    val quality: Int, // 0 = off, 1 = low, 2 = medium, 3 = high
     val ai: Boolean,
     val shortSide: Int
 )
@@ -64,6 +65,22 @@ object Enhancer {
     private fun motionBlurFilter(outFps: Int): String {
         val n = (outFps / 20.0).roundToInt().coerceIn(2, 4)
         return "tmix=frames=$n"
+    }
+
+    /** Improve quality, step 1: remove noise / compression grain (done BEFORE upscaling). */
+    private fun denoiseFilter(q: Int): String? = when (q) {
+        1 -> "hqdn3d=1.5:1.2:3:3"
+        2 -> "hqdn3d=3:2.5:5:5"
+        3 -> "hqdn3d=5:4:7:7"
+        else -> null
+    }
+
+    /** Improve quality, step 2: remove banding, boost contrast and color (done AFTER upscaling). */
+    private fun polishFilters(q: Int): List<String> = when (q) {
+        1 -> listOf("deband=range=16", "eq=contrast=1.03:saturation=1.05")
+        2 -> listOf("deband=range=16", "eq=contrast=1.05:saturation=1.10")
+        3 -> listOf("deband=range=16", "eq=contrast=1.08:saturation=1.15")
+        else -> emptyList()
     }
 
     private fun fpsFilter(srcFps: Double, target: Int): String? = when {
@@ -223,16 +240,33 @@ object Enhancer {
         val inPng = File(work, "in.png")
         val out = File(work, "out.jpg")
 
+        // AI path: clean the noise first so the AI does not enlarge it
+        val dn = denoiseFilter(s.quality)
+        var aiSource: Bitmap = bmp
+        if (useAi && dn != null) {
+            report(0.02f, "Cleaning noise...")
+            val raw = File(work, "raw.png")
+            val den = File(work, "den.png")
+            FileOutputStream(raw).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            ffmpeg(listOf("-y", "-i", raw.path, "-vf", dn, den.path), 0L) { }
+            aiSource = BitmapFactory.decodeFile(den.path) ?: bmp
+            raw.delete()
+        }
+
         val toSave: Bitmap = if (useAi) {
-            upscaler().upscale(bmp, tw, th) { done, total ->
+            upscaler().upscale(aiSource, tw, th) { done, total ->
                 ctx.ensureActive()
-                report(0.85f * done / total.coerceAtLeast(1), "AI enhancing... $done/$total")
+                report(0.05f + 0.8f * done / total.coerceAtLeast(1), "AI enhancing... $done/$total")
             }
         } else bmp
         FileOutputStream(inPng).use { toSave.compress(Bitmap.CompressFormat.PNG, 100, it) }
 
         val parts = mutableListOf<String>()
-        if (!useAi) parts += "scale=$tw:$th:flags=lanczos"
+        if (!useAi) {
+            if (dn != null) parts += dn
+            parts += "scale=$tw:$th:flags=lanczos"
+        }
+        parts += polishFilters(s.quality)
         if (!useAi || s.noBlur) parts += sharpen(s.noBlur)
         val vf = if (parts.isEmpty()) "null" else parts.joinToString(",")
 
@@ -258,16 +292,19 @@ object Enhancer {
         val (tw, th) = targetSize(info.width, info.height, s.shortSide)
         val upscaling = min(tw, th) > min(info.width, info.height)
         val useAi = s.ai && upscaling
+        val dn = denoiseFilter(s.quality)
 
         // ---- FAST MODE: one FFmpeg pass ----
         if (!useAi) {
             val fpsF = fpsFilter(info.fps, s.fps)
             val outFps = if (fpsF != null) s.fps else info.fps.roundToInt()
             val parts = mutableListOf<String>()
+            if (dn != null) parts += dn
             if (upscaling && fpsF != null) parts += fpsF
             parts += "scale=$tw:$th:flags=lanczos"
             if (!upscaling && fpsF != null) parts += fpsF
             if (s.motionBlur) parts += motionBlurFilter(outFps)
+            parts += polishFilters(s.quality)
             parts += sharpen(s.noBlur)
             parts += "format=yuv420p"
             report(0f, "Enhancing video...")
@@ -295,8 +332,9 @@ object Enhancer {
         val outDir = File(work, "out").apply { mkdirs() }
 
         report(0f, "Extracting frames...")
+        val extractVf = if (dn != null) "fps=$fpsStr,$dn" else "fps=$fpsStr"
         ffmpeg(
-            listOf("-y", "-i", input.path, "-vf", "fps=$fpsStr", "-q:v", "2", "${inDir.path}/%06d.jpg"),
+            listOf("-y", "-i", input.path, "-vf", extractVf, "-q:v", "2", "${inDir.path}/%06d.jpg"),
             info.durationMs
         ) { report(it * 0.05f, "Extracting frames...") }
 
@@ -324,6 +362,7 @@ object Enhancer {
         val parts = mutableListOf<String>()
         if (fpsF2 != null) parts += fpsF2
         if (s.motionBlur) parts += motionBlurFilter(outFps)
+        parts += polishFilters(s.quality)
         if (s.noBlur) parts += sharpen(true)
         parts += "format=yuv420p"
 
