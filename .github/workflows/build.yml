@@ -30,18 +30,18 @@ jobs:
           set +e
           ok=0
           for url in \
-            "https://storage.googleapis.com/ailia-models/nafnet/NAFNet-GoPro-width32.onnx" \
-            "https://huggingface.co/deepghs/image_restoration/resolve/main/NAFNet-GoPro.onnx"; do
+            "https://huggingface.co/deepghs/image_restoration/resolve/main/NAFNet-GoPro.onnx" \
+            "https://storage.googleapis.com/ailia-models/nafnet/NAFNet-GoPro-width32.onnx"; do
             echo "Trying $url"
             rm -f app/src/main/assets/deblur.onnx
             if curl -L --fail -o app/src/main/assets/deblur.onnx "$url" \
               && [ "$(stat -c%s app/src/main/assets/deblur.onnx)" -gt 5000000 ]; then
               ok=1
+              echo "Downloaded from $url"
               break
             fi
           done
           if [ "$ok" = "1" ]; then
-            echo "Deblur model downloaded:"
             ls -lh app/src/main/assets
           else
             rm -f app/src/main/assets/deblur.onnx
