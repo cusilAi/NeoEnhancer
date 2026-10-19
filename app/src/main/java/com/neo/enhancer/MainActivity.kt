@@ -407,21 +407,21 @@ fun EnhanceScreen(upscaler: () -> Upscaler, deblurrer: () -> Deblurrer) {
                 SettingSwitch("Blur Destroyer (AI deblur)", deblur) { if (!busy) deblur = it }
                 if (deblur) {
                     Text(
-                        "Removes motion blur and camera shake, then sharpens. Works best on mild to medium blur. It cannot rebuild details that are completely smeared away.",
+                        "Sharpens soft and slightly blurry shots with a strong multi-pass filter. It cannot rebuild details that are completely smeared away by heavy motion blur.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     if (!hasDeblurModel) {
                         Text(
-                            "The AI deblur model is not in this build, so strong sharpen will be used instead.",
+                            "Fast filter, no AI model needed.",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFFFFB74D)
                         )
                     }
                     Text(
                         if (mode == 0)
-                            "On video it runs on every frame and is very slow. Try clips of 2-3 seconds."
+                            "Works on video as a normal fast filter."
                         else
-                            "Can take 1-3 minutes per image.",
+                            "Fast, takes a few seconds.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }

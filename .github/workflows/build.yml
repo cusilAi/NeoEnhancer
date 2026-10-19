@@ -24,31 +24,6 @@ jobs:
           ls -lh app/src/main/assets
           test $(stat -c%s app/src/main/assets/upscaler.onnx) -gt 1000000
 
-      - name: Download AI deblur model (optional, tries several sources)
-        run: |
-          mkdir -p app/src/main/assets
-          set +e
-          ok=0
-          for url in \
-            "https://huggingface.co/deepghs/image_restoration/resolve/main/NAFNet-GoPro.onnx" \
-            "https://storage.googleapis.com/ailia-models/nafnet/NAFNet-GoPro-width32.onnx"; do
-            echo "Trying $url"
-            rm -f app/src/main/assets/deblur.onnx
-            if curl -L --fail -o app/src/main/assets/deblur.onnx "$url" \
-              && [ "$(stat -c%s app/src/main/assets/deblur.onnx)" -gt 5000000 ]; then
-              ok=1
-              echo "Downloaded from $url"
-              break
-            fi
-          done
-          if [ "$ok" = "1" ]; then
-            ls -lh app/src/main/assets
-          else
-            rm -f app/src/main/assets/deblur.onnx
-            echo "::warning::Deblur model could not be downloaded. The app will use strong sharpen instead."
-          fi
-          exit 0
-
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
