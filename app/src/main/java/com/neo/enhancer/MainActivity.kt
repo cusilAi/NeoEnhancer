@@ -404,7 +404,7 @@ fun EnhanceScreen(upscaler: () -> Upscaler, deblurrer: () -> Deblurrer) {
                     }
                 }
 
-                SettingSwitch("Blur Destroyer (AI deblur)", deblur) { if (!busy) deblur = it }
+                SettingSwitch("Blur Destroyer", deblur) { if (!busy) deblur = it }
                 if (deblur) {
                     Text(
                         "Sharpens soft and slightly blurry shots with a strong multi-pass filter. It cannot rebuild details that are completely smeared away by heavy motion blur.",

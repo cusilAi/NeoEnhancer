@@ -63,7 +63,7 @@ object Enhancer {
         if (noBlur) "unsharp=7:7:1.5:7:7:0.6" else "unsharp=5:5:0.8:5:5:0.0"
 
     /** Used when the AI deblur model is not in the build: strong sharpen. */
-    private const val CLASSIC_DEBLUR = "unsharp=5:5:1.4:5:5:0.0,unsharp=9:9:1.0:9:9:0.0,unsharp=13:13:0.8:13:13:0.0"
+    private const val CLASSIC_DEBLUR = "unsharp=5:5:0.9:5:5:0.0,unsharp=9:9:0.6:9:9:0.0,unsharp=13:13:0.4:13:13:0.0"
 
     /** Motion blur = blend neighbouring frames. More frames at higher FPS. */
     private fun motionBlurFilter(outFps: Int): String {
@@ -273,7 +273,7 @@ object Enhancer {
         val out = File(work, "out.jpg")
 
         // AI path: clean the noise first so the AI does not enlarge it
-        val dn = denoiseFilter(s.quality)
+        val dn = denoiseFilter(if (s.deblur) maxOf(s.quality, 3) else s.quality)
         var aiSource: Bitmap = bmp
         if (useAi && dn != null) {
             report(stage(0.02f), "Cleaning noise...")
@@ -328,7 +328,7 @@ object Enhancer {
         val useAi = s.ai && upscaling
         val deblurAi = s.deblur && Deblurrer.isUsable(context, deblurrer)
         val deblurClassic = s.deblur && !deblurAi
-        val dn = denoiseFilter(s.quality)
+        val dn = denoiseFilter(if (s.deblur) maxOf(s.quality, 3) else s.quality)
 
         // ---- FAST MODE: one FFmpeg pass ----
         if (!useAi && !deblurAi) {
